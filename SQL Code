@@ -1,0 +1,134 @@
+-- PART 1: Creating Tables 
+-- 1. Create Dimension: Sales Reps
+CREATE TABLE Dim_SalesReps (
+    "Rep_ID" VARCHAR(50) PRIMARY KEY,
+    "Name" VARCHAR(100),
+    "Region" VARCHAR(50),
+    "Manager" VARCHAR(100)
+);
+
+-- 2. Create Dimension: Accounts
+CREATE TABLE Dim_Accounts (
+    "Account_ID" VARCHAR(50) PRIMARY KEY,
+    "Account_Name" VARCHAR(255),
+    "Industry" VARCHAR(100),
+    "Employees" INT,
+    "City" VARCHAR(100)
+);
+
+-- 3. Create Dimension: Products
+CREATE TABLE Dim_Products (
+    "Product_ID" VARCHAR(50) PRIMARY KEY,
+    "Product_Name" VARCHAR(150),
+    "Category" VARCHAR(50),
+    "Base_Price" DECIMAL(10, 2)
+);
+
+-- 4. Create Fact Table: Opportunities
+CREATE TABLE Fact_Opportunities (
+    "Opportunity_ID" VARCHAR(50) PRIMARY KEY,
+    "Rep_ID" VARCHAR(50),
+    "Account_ID" VARCHAR(50),
+    "Product_ID" VARCHAR(50),
+    "Create_Date" DATE,
+    "Close_Date" DATE,
+    "Stage" VARCHAR(50),
+    "Probability_Percent" INT,
+    "Amount" DECIMAL(15, 2),
+    "Discount_Percent" DECIMAL(5, 2),
+    
+    -- Foreign Key Constraints (Links tables together)
+    CONSTRAINT fk_reps FOREIGN KEY ("Rep_ID") REFERENCES Dim_SalesReps("Rep_ID"),
+    CONSTRAINT fk_accounts FOREIGN KEY ("Account_ID") REFERENCES Dim_Accounts("Account_ID"),
+    CONSTRAINT fk_products FOREIGN KEY ("Product_ID") REFERENCES Dim_Products("Product_ID")
+);
+--PART 2: Standardization & Handling Nulls & Creating New Metrics 
+-- Standardize Region names to uppercase for consistency
+UPDATE Dim_SalesReps
+SET "Region" = UPPER("Region");
+
+-- Handle NULL Probability: Default to 0 if missing
+UPDATE Fact_Opportunities
+SET "Probability_Percent" = COALESCE("Probability_Percent", 0)
+WHERE "Probability_Percent" IS NULL;
+
+-- Data Logic Check: Ensure Close Date is not before Create Date
+-- Note: PostgreSQL uses DATE_TRUNC('day', date) + interval '30 days'
+UPDATE Fact_Opportunities
+SET "Close_Date" = "Create_Date" + INTERVAL '30 days'
+WHERE "Close_Date" < "Create_Date";
+
+-- Add a new column for Sales Cycle Duration (in Days)
+ALTER TABLE Fact_Opportunities
+ADD COLUMN "Sales_Cycle_Days" INT;
+
+-- Calculate the difference between Create and Close dates (Result is in days)
+UPDATE Fact_Opportunities
+SET "Sales_Cycle_Days" = ("Close_Date" - "Create_Date");
+
+-- Add a column for Expected Revenue (Weighted Pipeline)
+ALTER TABLE Fact_Opportunities
+ADD COLUMN "Expected_Revenue" NUMERIC(18, 2); -- Use NUMERIC for precision
+
+-- Calculate Expected Revenue: Amount * (Probability / 100)
+UPDATE Fact_Opportunities
+SET "Expected_Revenue" = "Amount" * ("Probability_Percent" / 100.0);
+
+--Part 3:Creating a "Reporting View"
+
+CREATE OR REPLACE VIEW v_Sales_Pipeline_Master AS
+SELECT 
+    op."Opportunity_ID",
+    op."Create_Date",
+    op."Close_Date",
+    op."Stage",
+    op."Amount",
+    op."Probability_Percent",
+    op."Expected_Revenue",
+    op."Sales_Cycle_Days",
+    
+    -- Sales Rep Details
+    rep."Name" AS "Sales_Rep_Name",
+    rep."Region" AS "Sales_Region",
+    rep."Manager" AS "Sales_Manager",
+    
+    -- Account Details
+    acc."Account_Name",
+    acc."Industry" AS "Account_Industry",
+    acc."City" AS "Account_City",
+    
+    -- Product Details
+    prod."Product_Name",
+    prod."Category" AS "Product_Category"
+
+FROM Fact_Opportunities op
+LEFT JOIN Dim_SalesReps rep ON op."Rep_ID" = rep."Rep_ID"
+LEFT JOIN Dim_Accounts acc ON op."Account_ID" = acc."Account_ID"
+LEFT JOIN Dim_Products prod ON op."Product_ID" = prod."Product_ID";
+
+--Part 4: Analytical Queries
+SELECT 
+    r."Region",
+    COUNT(o."Opportunity_ID") AS "Total_Opportunities",
+    SUM(CASE WHEN o."Stage" = 'Closed Won' THEN 1 ELSE 0 END) AS "Won_Opportunities",
+    
+    -- Calculate Conversion Rate %
+    CAST(
+        SUM(CASE WHEN o."Stage" = 'Closed Won' THEN 1 ELSE 0 END) * 100.0 / 
+        COUNT(o."Opportunity_ID") 
+    AS NUMERIC(10,2)) AS "Conversion_Rate_Pct"
+
+FROM Fact_Opportunities o
+JOIN Dim_SalesReps r ON o."Rep_ID" = r."Rep_ID"
+GROUP BY r."Region"
+ORDER BY "Conversion_Rate_Pct" DESC;
+
+SELECT 
+    "Stage",
+    COUNT("Opportunity_ID") AS "Deal_Count",
+    SUM("Amount") AS "Total_Pipeline_Value",
+    AVG("Sales_Cycle_Days") AS "Avg_Days_In_Cycle"
+FROM Fact_Opportunities
+WHERE "Stage" NOT IN ('Closed Won', 'Closed Lost') -- Only active pipeline
+GROUP BY "Stage"
+ORDER BY "Total_Pipeline_Value" DESC;

@@ -1,0 +1,96 @@
+import pandas as pd
+import random
+from faker import Faker
+from datetime import datetime, timedelta
+
+fake = Faker()
+
+# --- CONFIGURATION ---
+NUM_REPS = 15
+NUM_ACCOUNTS = 100
+NUM_PRODUCTS = 20
+NUM_OPPORTUNITIES = 2000  # Size of your dataset
+
+# --- 1. GENERATE DIMENSION: SALES REPS ---
+regions = ['North America', 'EMEA', 'APAC', 'LATAM']
+reps_data = []
+for i in range(1, NUM_REPS + 1):
+    reps_data.append({
+        'Rep_ID': i,
+        'Name': fake.name(),
+        'Region': random.choice(regions),
+        'Manager': fake.last_name()
+    })
+df_reps = pd.DataFrame(reps_data)
+
+# --- 2. GENERATE DIMENSION: ACCOUNTS ---
+industries = ['Technology', 'Healthcare', 'Finance', 'Manufacturing', 'Retail']
+accounts_data = []
+for i in range(1, NUM_ACCOUNTS + 1):
+    accounts_data.append({
+        'Account_ID': i,
+        'Account_Name': fake.company(),
+        'Industry': random.choice(industries),
+        'Employees': random.randint(50, 5000),
+        'City': fake.city()
+    })
+df_accounts = pd.DataFrame(accounts_data)
+
+# --- 3. GENERATE DIMENSION: PRODUCTS ---
+products_data = []
+for i in range(1, NUM_PRODUCTS + 1):
+    products_data.append({
+        'Product_ID': i,
+        'Product_Name': f"Solution {fake.word().title()}",
+        'Category': random.choice(['Software', 'Hardware', 'Service']),
+        'Base_Price': random.randint(500, 10000)
+    })
+df_products = pd.DataFrame(products_data)
+
+# --- 4. GENERATE FACT: OPPORTUNITIES ---
+stages = ['Prospecting', 'Qualification', 'Proposal', 'Negotiation', 'Closed Won', 'Closed Lost']
+opportunities_data = []
+
+start_date = datetime(2023, 1, 1)
+
+for i in range(1, NUM_OPPORTUNITIES + 1):
+    create_date = start_date + timedelta(days=random.randint(0, 700))
+    days_to_close = random.randint(10, 180)
+    close_date = create_date + timedelta(days=days_to_close)
+    
+    stage = random.choices(stages, weights=[0.2, 0.2, 0.2, 0.15, 0.15, 0.1], k=1)[0]
+    
+    # Logic for Probability and Revenue
+    if stage == 'Closed Won':
+        prob = 100
+    elif stage == 'Closed Lost':
+        prob = 0
+    else:
+        prob = random.choice([10, 25, 50, 75, 90])
+        
+    product = df_products.sample(1).iloc[0]
+    quantity = random.randint(1, 10)
+    amount = product['Base_Price'] * quantity
+
+    opportunities_data.append({
+        'Opportunity_ID': f"OPP-{i:05d}",
+        'Rep_ID': random.choice(df_reps['Rep_ID']),
+        'Account_ID': random.choice(df_accounts['Account_ID']),
+        'Product_ID': product['Product_ID'],
+        'Create_Date': create_date.strftime('%Y-%m-%d'),
+        'Close_Date': close_date.strftime('%Y-%m-%d'),
+        'Stage': stage,
+        'Probability_Percent': prob,
+        'Amount': amount,
+        'Discount_Percent': random.randint(0, 20) / 100
+    })
+
+df_opportunities = pd.DataFrame(opportunities_data)
+
+# --- EXPORT ---
+df_reps.to_csv('Dim_SalesReps.csv', index=False)
+df_accounts.to_csv('Dim_Accounts.csv', index=False)
+df_products.to_csv('Dim_Products.csv', index=False)
+df_opportunities.to_csv('Fact_Opportunities.csv', index=False)
+
+print("Data generated successfully!")
